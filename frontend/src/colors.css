@@ -1,0 +1,67 @@
+/* Color Theme Variables for SaaS Dashboard */
+
+:root {
+  /* Background Colors */
+  --bg-primary: #F8F9FB;
+  --bg-secondary: #F1F3F5;
+  --bg-tertiary: #FFFFFF;
+  
+  /* Pastel Card Colors */
+  --card-lavender: #EAE6FF;
+  --card-mint: #E8FFF3;
+  --card-sky-blue: #EAF4FF;
+  --card-coral: #FFE8E8;
+  --card-peach: #FFF4E6;
+  
+  /* Text Colors */
+  --text-primary: #333333;
+  --text-secondary: #666666;
+  --text-muted: #999999;
+  --text-light: #CCCCCC;
+  
+  /* Accent Colors */
+  --accent-teal: #2DD4BF;
+  --accent-teal-light: #5EEAD4;
+  --accent-teal-dark: #14B8A6;
+  
+  /* Glassmorphism Colors */
+  --glass-bg: rgba(255, 255, 255, 0.25);
+  --glass-border: rgba(255, 255, 255, 0.18);
+  --glass-shadow: rgba(0, 0, 0, 0.1);
+  
+  /* Status Colors */
+  --success: #10B981;
+  --warning: #F59E0B;
+  --error: #EF4444;
+  --info: #3B82F6;
+  
+  /* Gradient Definitions */
+  --gradient-lavender: linear-gradient(135deg, #EAE6FF 0%, #F3F0FF 100%);
+  --gradient-mint: linear-gradient(135deg, #E8FFF3 0%, #F0FDF4 100%);
+  --gradient-sky-blue: linear-gradient(135deg, #EAF4FF 0%, #F0F9FF 100%);
+  --gradient-coral: linear-gradient(135deg, #FFE8E8 0%, #FEF2F2 100%);
+  --gradient-peach: linear-gradient(135deg, #FFF4E6 0%, #FFFBEB 100%);
+  --gradient-teal: linear-gradient(135deg, #2DD4BF 0%, #5EEAD4 100%);
+  
+  /* Shadow Definitions */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  
+  /* Border Radius */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+  
+  /* Spacing */
+  --space-xs: 0.25rem;
+  --space-sm: 0.5rem;
+  --space-md: 1rem;
+  --space-lg: 1.5rem;
+  --space-xl: 2rem;
+  --space-2xl: 3rem;
+  --space-3xl: 4rem;
+}

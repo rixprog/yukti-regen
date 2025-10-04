@@ -1,0 +1,64 @@
+/* Global Styles for Clean Modern SaaS Dashboard */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: #F8F9FB;
+  color: #333333;
+  overflow-x: hidden;
+  line-height: 1.6;
+}
+
+#root {
+  min-height: 100vh;
+  position: relative;
+}
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #F1F3F5;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #2DD4BF;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #14B8A6;
+}
+
+/* Selection Styling */
+::selection {
+  background: rgba(45, 212, 191, 0.2);
+  color: #333333;
+}
+
+::-moz-selection {
+  background: rgba(45, 212, 191, 0.2);
+  color: #333333;
+}
+
+/* Focus Styling */
+button:focus-visible {
+  outline: 2px solid #2DD4BF;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px rgba(45, 212, 191, 0.1);
+}
+
+/* Smooth Animations */
+* {
+  transition: all 0.2s ease;
+}
