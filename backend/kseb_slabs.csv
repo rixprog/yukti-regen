@@ -1,0 +1,7 @@
+units_min,units_max,rate_per_kwh,slab_description,slab_type
+0,250,6.50,0-250 units,domestic
+0,300,6.50,0-300 units,domestic
+0,350,7.60,0-350 units,domestic
+0,400,7.60,0-400 units,domestic
+0,500,7.60,0-500 units,domestic
+500,999999,8.70,above 500 units,domestic
