@@ -8,8 +8,19 @@ import json
 from pathlib import Path
 import requests
 import csv
+import pandas as pd
+import google.generativeai as genai
+from voice_assistant import transcribe_audio, get_ai_response, text_to_speech_elevenlabs
+from fastapi import UploadFile, File
+import base64
 
 app = FastAPI(title="Carbon Footprint Visualizer API", version="1.0.0")
+
+# API configuration for new data sources
+
+# Configure Gemini API
+GEMINI_API_KEY = "AIzaSyB_Anepsd_vLywEtUlbTdnZQ30c6oFx6d8"
+genai.configure(api_key=GEMINI_API_KEY)
 
 # CORS middleware for React frontend
 app.add_middleware(
@@ -295,6 +306,536 @@ class ElectricityBoard(BaseModel):
 class LocationData(BaseModel):
     latitude: float
     longitude: float
+
+class PolygonData(BaseModel):
+    polygon_points: List[List[float]]  # List of [lat, lon] coordinates
+    grid_points: List[List[float]]     # List of [lat, lon] coordinates within polygon
+    analysis_type: str = "renewable_energy"  # Type of analysis requested
+
+class GridPointData(BaseModel):
+    point_id: int
+    coordinates: Dict[str, float]
+    elevation_data: Dict
+    environmental_data: Dict
+    renewable_energy_potential: Dict
+    analysis_summary: Dict
+
+class AnalysisMetadata(BaseModel):
+    polygon_points_count: int
+    grid_points_count: int
+    processed_points: int
+    analysis_type: str
+    estimated_area_km2: float
+    grid_density_per_km2: float
+    timestamp: str
+
+class StructuredAnalysisResponse(BaseModel):
+    analysis_metadata: AnalysisMetadata
+    grid_points_data: List[GridPointData]
+
+# Environmental data fetching functions
+def get_elevation_data(latitude: float, longitude: float) -> dict:
+    """Get elevation data for given coordinates using Open-Elevation API"""
+    try:
+        response = requests.get(
+            f"https://api.open-elevation.com/api/v1/lookup?locations={latitude},{longitude}",
+            timeout=10
+        )
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('results') and len(data['results']) > 0:
+                return {
+                    "elevation": data['results'][0].get('elevation', 0),
+                    "latitude": data['results'][0].get('latitude', latitude),
+                    "longitude": data['results'][0].get('longitude', longitude)
+                }
+    except Exception as e:
+        print(f"Error fetching elevation data: {e}")
+    
+    return {
+        "elevation": 0,
+        "latitude": latitude,
+        "longitude": longitude
+    }
+
+def get_nasa_power_data(latitude: float, longitude: float) -> dict:
+    """Get solar radiation and wind speed data from NASA POWER API"""
+    try:
+        url = "https://power.larc.nasa.gov/api/temporal/monthly/point"
+        params = {
+            "parameters": "ALLSKY_SFC_SW_DWN,WS10M",
+            "community": "RE",
+            "longitude": longitude,
+            "latitude": latitude,
+            "start": "2023",
+            "end": "2023",
+            "format": "JSON"
+        }
+        
+        response = requests.get(url, params=params, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            properties = data.get("properties", {})
+            parameter = properties.get("parameter", {})
+            
+            # Extract solar radiation data (average of monthly values)
+            solar_data = parameter.get("ALLSKY_SFC_SW_DWN", {})
+            wind_data = parameter.get("WS10M", {})
+            
+            # Calculate averages
+            solar_values = [v for v in solar_data.values() if isinstance(v, (int, float))]
+            wind_values = [v for v in wind_data.values() if isinstance(v, (int, float))]
+            
+            avg_solar_radiation = sum(solar_values) / len(solar_values) if solar_values else 0
+            avg_wind_speed = sum(wind_values) / len(wind_values) if wind_values else 0
+            
+            return {
+                "solar_radiation": avg_solar_radiation,
+                "wind_speed": avg_wind_speed,
+                "coordinates": {
+                    "latitude": latitude,
+                    "longitude": longitude
+                }
+            }
+    except Exception as e:
+        print(f"Error fetching NASA POWER data: {e}")
+    
+    return {
+        "solar_radiation": 0,
+        "wind_speed": 0,
+        "coordinates": {
+            "latitude": latitude,
+            "longitude": longitude
+        }
+    }
+
+def get_water_body_data(latitude: float, longitude: float) -> dict:
+    """Get water body information using is-on-water API"""
+    try:
+        url = f"https://is-on-water.balbona.me/api/v1/get/{latitude}/{longitude}"
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            return {
+                "is_water": data.get("isWater", False),
+                "feature": data.get("feature", "UNKNOWN"),
+                "coordinates": {
+                    "latitude": latitude,
+                    "longitude": longitude
+                }
+            }
+    except Exception as e:
+        print(f"Error fetching water body data: {e}")
+    
+    return {
+        "is_water": False,
+        "feature": "UNKNOWN",
+        "coordinates": {
+            "latitude": latitude,
+            "longitude": longitude
+        }
+    }
+
+def get_location_data(latitude: float, longitude: float) -> dict:
+    """Get location information using Nominatim reverse geocoding"""
+    try:
+        url = "https://nominatim.openstreetmap.org/reverse"
+        params = {
+            "format": "json",
+            "lat": latitude,
+            "lon": longitude,
+            "zoom": 10
+        }
+        response = requests.get(url, params=params, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            return {
+                "display_name": data.get("display_name", "Unknown Location"),
+                "address": data.get("address", {}),
+                "coordinates": {
+                    "latitude": latitude,
+                    "longitude": longitude
+                }
+            }
+    except Exception as e:
+        print(f"Error fetching location data: {e}")
+    
+    return {
+        "display_name": "Unknown Location",
+        "address": {},
+        "coordinates": {
+            "latitude": latitude,
+            "longitude": longitude
+        }
+    }
+
+def get_environmental_data(latitude: float, longitude: float) -> dict:
+    """Get environmental data from multiple APIs"""
+    try:
+        # Get data from all three APIs
+        nasa_data = get_nasa_power_data(latitude, longitude)
+        water_data = get_water_body_data(latitude, longitude)
+        location_data = get_location_data(latitude, longitude)
+        
+        return {
+            "nasa_power": nasa_data,
+            "water_body": water_data,
+            "location": location_data,
+            "coordinates": {
+                "latitude": latitude,
+                "longitude": longitude
+            }
+        }
+    except Exception as e:
+        print(f"Error fetching environmental data for {latitude}, {longitude}: {e}")
+        return None
+
+def select_strategic_grid_points(grid_points: list, num_points: int = 10) -> list:
+    """Select strategic grid points that provide comprehensive coverage of the polygon"""
+    if len(grid_points) <= num_points:
+        return grid_points
+    
+    # Calculate polygon bounds
+    lats = [point[0] for point in grid_points]
+    lons = [point[1] for point in grid_points]
+    min_lat, max_lat = min(lats), max(lats)
+    min_lon, max_lon = min(lons), max(lons)
+    
+    # Create a grid of regions within the polygon
+    lat_step = (max_lat - min_lat) / 3  # 3x3 grid
+    lon_step = (max_lon - min_lon) / 3
+    
+    selected_points = []
+    regions = {}
+    
+    # Group points by regions
+    for point in grid_points:
+        lat, lon = point[0], point[1]
+        region_lat = int((lat - min_lat) / lat_step)
+        region_lon = int((lon - min_lon) / lon_step)
+        region_key = (region_lat, region_lon)
+        
+        if region_key not in regions:
+            regions[region_key] = []
+        regions[region_key].append(point)
+    
+    # Select one point from each region, prioritizing center points
+    for region_key, points in regions.items():
+        if points:
+            # Calculate center of region
+            center_lat = min_lat + (region_key[0] + 0.5) * lat_step
+            center_lon = min_lon + (region_key[1] + 0.5) * lon_step
+            
+            # Find point closest to center
+            best_point = min(points, key=lambda p: 
+                ((p[0] - center_lat) ** 2 + (p[1] - center_lon) ** 2) ** 0.5)
+            selected_points.append(best_point)
+    
+    # If we need more points, add the remaining highest potential points
+    if len(selected_points) < num_points:
+        remaining_points = [p for p in grid_points if p not in selected_points]
+        # Sort by distance from center of polygon
+        center_lat = (min_lat + max_lat) / 2
+        center_lon = (min_lon + max_lon) / 2
+        remaining_points.sort(key=lambda p: 
+            ((p[0] - center_lat) ** 2 + (p[1] - center_lon) ** 2) ** 0.5)
+        
+        selected_points.extend(remaining_points[:num_points - len(selected_points)])
+    
+    return selected_points[:num_points]
+
+def calculate_renewable_energy_potential(environmental_data: dict, elevation_data: dict, water_body_proximity: dict = None) -> dict:
+    """Calculate renewable energy potential based on environmental and elevation data using proper thresholds"""
+    if not environmental_data or not elevation_data:
+        return {"solar": None, "wind": None, "hydro": None, "geothermal": None}
+    
+    nasa_data = environmental_data.get("nasa_power", {})
+    water_data = environmental_data.get("water_body", {})
+    elevation = elevation_data.get("elevation", None)
+    
+    # Solar potential calculation using NASA POWER data with proper thresholds
+    solar_radiation = nasa_data.get("solar_radiation", None)
+    
+    if solar_radiation is None or solar_radiation <= 0:
+        solar_potential = None
+        solar_suitability = "poor"
+    else:
+        # Solar thresholds based on kWh/m²/day
+        if solar_radiation < 3:
+            solar_potential = 0.1  # Poor
+            solar_suitability = "poor"
+        elif 3 <= solar_radiation < 4.5:
+            solar_potential = 0.4  # Moderate
+            solar_suitability = "moderate"
+        elif 4.5 <= solar_radiation < 5.5:
+            solar_potential = 0.7  # Good
+            solar_suitability = "good"
+        else:  # >= 5.5
+            solar_potential = 1.0  # Excellent
+            solar_suitability = "excellent"
+    
+    # Wind potential calculation using NASA POWER data with proper thresholds
+    wind_speed = nasa_data.get("wind_speed", None)
+    
+    if wind_speed is None or wind_speed <= 0:
+        wind_potential = None
+        wind_suitability = "not_usable"
+    else:
+        # Wind thresholds based on m/s
+        if wind_speed < 3:
+            wind_potential = 0.0  # Not usable
+            wind_suitability = "not_usable"
+        elif 3 <= wind_speed < 5:
+            wind_potential = 0.3  # Only suitable for very small turbines
+            wind_suitability = "small_turbines"
+        elif 5 <= wind_speed < 7:
+            wind_potential = 0.6  # Good for most onshore turbines
+            wind_suitability = "good"
+        elif 7 <= wind_speed < 9:
+            wind_potential = 0.9  # Excellent wind farm potential
+            wind_suitability = "excellent"
+        else:  # >= 9
+            wind_potential = 0.8  # Very high but may have limitations
+            wind_suitability = "very_high"
+    
+    # Hydro potential calculation - ONLY for lakes, sea, ocean (not smaller ponds)
+    is_water = water_data.get("is_water", False)
+    water_feature = water_data.get("feature", None)
+    
+    if not is_water:
+        hydro_potential = 0.0
+        hydro_suitability = "not_water"
+    else:
+        # Only consider major water bodies for hydro potential
+        if water_feature in ["LAKE", "SEA", "OCEAN"]:
+            if elevation is not None and elevation > 100:  # Higher elevation = better hydro potential
+                hydro_potential = min(1.0, elevation / 1000)
+                hydro_suitability = "suitable"
+            else:
+                hydro_potential = 0.5  # Water body but low elevation
+                hydro_suitability = "moderate"
+        else:
+            hydro_potential = 0.0  # Smaller ponds, rivers not suitable for large hydro
+            hydro_suitability = "not_suitable"
+    
+    # Geothermal potential (based on elevation only)
+    if elevation is None:
+        geothermal_potential = None
+        geothermal_suitability = "unknown"
+    else:
+        if elevation > 2000:
+            geothermal_potential = 0.8
+            geothermal_suitability = "high"
+        elif elevation > 1000:
+            geothermal_potential = 0.5
+            geothermal_suitability = "moderate"
+        else:
+            geothermal_potential = 0.2
+            geothermal_suitability = "low"
+    
+    return {
+        "solar": {
+            "potential": round(solar_potential, 3) if solar_potential is not None else None,
+            "suitability": solar_suitability,
+            "raw_value": solar_radiation
+        },
+        "wind": {
+            "potential": round(wind_potential, 3) if wind_potential is not None else None,
+            "suitability": wind_suitability,
+            "raw_value": wind_speed
+        },
+        "hydro": {
+            "potential": round(hydro_potential, 3) if hydro_potential is not None else None,
+            "suitability": hydro_suitability,
+            "raw_value": water_feature
+        },
+        "geothermal": {
+            "potential": round(geothermal_potential, 3) if geothermal_potential is not None else None,
+            "suitability": geothermal_suitability,
+            "raw_value": elevation
+        }
+    }
+
+def _get_best_energy_type(energy_potential: dict) -> str:
+    """Get the best energy type from potential values"""
+    if not energy_potential:
+        return "none"
+    
+    # Filter out None values and find the maximum potential
+    valid_potentials = {}
+    for energy_type, data in energy_potential.items():
+        if isinstance(data, dict) and data.get("potential") is not None and data.get("potential", 0) > 0:
+            valid_potentials[energy_type] = data["potential"]
+    
+    if not valid_potentials:
+        return "none"
+    
+    return max(valid_potentials.items(), key=lambda x: x[1])[0]
+
+def _get_overall_suitability(energy_potential: dict) -> float:
+    """Get the overall suitability score"""
+    if not energy_potential:
+        return 0.0
+    
+    # Filter out None values and find the maximum potential
+    valid_potentials = []
+    for energy_type, data in energy_potential.items():
+        if isinstance(data, dict) and data.get("potential") is not None and data.get("potential", 0) > 0:
+            valid_potentials.append(data["potential"])
+    
+    if not valid_potentials:
+        return 0.0
+    
+    return max(valid_potentials)
+
+def _get_suitable_energy_types(energy_potential: dict) -> list:
+    """Get all energy types that are suitable (potential > 0.3)"""
+    suitable_types = []
+    for energy_type, data in energy_potential.items():
+        if isinstance(data, dict) and data.get("potential") is not None and data.get("potential", 0) >= 0.3:
+            suitable_types.append(energy_type)
+    return suitable_types
+
+def analyze_with_gemini(grid_points_data: list) -> dict:
+    """Analyze grid points using Gemini 2.0 Flash for renewable energy suitability"""
+    try:
+        # Prepare data for Gemini
+        analysis_prompt = f"""
+You are an expert renewable energy consultant analyzing environmental data for optimal energy plant placement. 
+
+Analyze the following {len(grid_points_data)} grid points and determine their suitability for different renewable energy sources (Solar, Wind, Hydro, Tidal, Geothermal).
+
+IMPORTANT RULES:
+1. If a grid point is not suitable for ANY renewable energy source, mark it as "REJECTED" with reason
+2. For suitable points, identify ALL possible renewable energy sources (not just the best one)
+3. Provide confidence scores (0-100) for each energy type
+4. Give specific technical reasoning for each decision
+5. Consider environmental constraints, weather patterns, elevation, and geographical factors
+
+SPECIAL FOCUS ON HYDRO POWER:
+- Prioritize hydro power recommendations for points closer to water bodies (lakes, rivers, dams)
+- Consider elevation differences for hydroelectric potential
+- Analyze precipitation patterns and water flow potential
+- Look for points with higher elevation that could benefit from gravity-fed systems
+- Consider proximity to existing water infrastructure
+
+ENVIRONMENTAL PARAMETERS AVAILABLE:
+- Solar: shortwave_radiation, direct_radiation, global_tilted_irradiance, cloud_cover, uv_index, temperature
+- Wind: wind_speed_10m, wind_speed_80m, wind_speed_120m, wind_direction_10m
+- Hydro: precipitation, rain, relative_humidity_2m, elevation, proximity to water bodies
+- Tidal: proximity to coast, elevation, precipitation patterns
+- Geothermal: elevation, temperature gradients, geological factors
+
+GEOGRAPHICAL CONTEXT:
+- This analysis is for Kerala, India (coordinates around 10.7°N, 76.4°E)
+- Kerala has numerous rivers, backwaters, and water bodies
+- Consider the Western Ghats mountain range for elevation-based hydro potential
+- Look for points with significant elevation changes for hydroelectric potential
+
+GRID POINTS DATA:
+{json.dumps(grid_points_data, indent=2, default=str)}
+
+Please provide your analysis in the following JSON structure:
+{{
+    "analysis_summary": {{
+        "total_points_analyzed": {len(grid_points_data)},
+        "suitable_points": 0,
+        "rejected_points": 0,
+        "overall_recommendations": "string"
+    }},
+    "grid_point_analyses": [
+        {{
+            "point_id": 1,
+            "coordinates": {{"latitude": 0.0, "longitude": 0.0}},
+            "status": "SUITABLE" or "REJECTED",
+            "rejection_reason": "string if rejected",
+            "recommended_energy_sources": [
+                {{
+                    "energy_type": "solar/wind/hydro/tidal/geothermal",
+                    "suitability_score": 85,
+                    "confidence_level": "high/medium/low",
+                    "technical_reasoning": "detailed explanation",
+                    "implementation_priority": "primary/secondary/tertiary",
+                    "estimated_capacity_potential": "high/medium/low",
+                    "environmental_considerations": "string",
+                    "economic_viability": "high/medium/low"
+                }}
+            ],
+            "overall_assessment": "comprehensive summary",
+            "key_environmental_factors": ["factor1", "factor2", "factor3"],
+            "risk_factors": ["risk1", "risk2"],
+            "opportunity_factors": ["opp1", "opp2"]
+        }}
+    ],
+    "energy_type_summary": {{
+        "solar": {{"total_suitable_points": 0, "average_score": 0, "best_location": "point_id"}},
+        "wind": {{"total_suitable_points": 0, "average_score": 0, "best_location": "point_id"}},
+        "hydro": {{"total_suitable_points": 0, "average_score": 0, "best_location": "point_id"}},
+        "tidal": {{"total_suitable_points": 0, "average_score": 0, "best_location": "point_id"}},
+        "geothermal": {{"total_suitable_points": 0, "average_score": 0, "best_location": "point_id"}}
+    }},
+    "strategic_recommendations": {{
+        "primary_energy_focus": "string",
+        "secondary_energy_focus": "string",
+        "development_phases": ["phase1", "phase2", "phase3"],
+        "environmental_impact_assessment": "string",
+        "economic_considerations": "string"
+    }}
+}}
+
+Be thorough, technical, and practical in your analysis. Consider real-world implementation challenges and opportunities.
+"""
+
+        # Initialize Gemini model
+        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        
+        print("🤖 Sending data to Gemini 2.0 Flash for analysis...")
+        print("=" * 60)
+        
+        # Generate response
+        response = model.generate_content(analysis_prompt)
+        
+        print("✅ Gemini analysis completed!")
+        print("=" * 60)
+        print(f"Raw Gemini response (first 500 chars): {response.text[:500]}...")
+        print("=" * 60)
+        
+        # Parse JSON response - handle markdown code blocks
+        try:
+            response_text = response.text.strip()
+            
+            # Remove markdown code blocks if present
+            if response_text.startswith("```json"):
+                response_text = response_text[7:]  # Remove ```json
+            if response_text.startswith("```"):
+                response_text = response_text[3:]   # Remove ```
+            if response_text.endswith("```"):
+                response_text = response_text[:-3]  # Remove trailing ```
+            
+            response_text = response_text.strip()
+            
+            gemini_analysis = json.loads(response_text)
+            return {
+                "status": "success",
+                "gemini_analysis": gemini_analysis,
+                "raw_response": response.text
+            }
+        except json.JSONDecodeError as e:
+            print(f"❌ Error parsing Gemini JSON response: {e}")
+            print(f"Cleaned response text: {response_text[:500]}...")
+            return {
+                "status": "error",
+                "message": "Failed to parse Gemini response as JSON",
+                "raw_response": response.text
+            }
+            
+    except Exception as e:
+        print(f"❌ Error in Gemini analysis: {e}")
+        return {
+            "status": "error",
+            "message": f"Gemini analysis failed: {str(e)}",
+            "raw_response": None
+        }
 
 # Carbon footprint calculation functions
 def calculate_commute_co2(transport_mode: str, distance_km: float) -> float:
@@ -680,6 +1221,285 @@ async def calculate_cost_preview(energy_kwh: float, electricity_board: str, mont
         "cost_rupees": cost,
         "effective_rate": cost / energy_kwh if energy_kwh > 0 else 0
     }
+
+@app.post("/api/analyze-polygon", response_model=StructuredAnalysisResponse)
+async def analyze_polygon_data(polygon_data: PolygonData):
+    """Receive polygon data from frontend and process environmental data for each grid point"""
+    print("=" * 80)
+    print("🌍 RENEWABLE ENERGY SITING ANALYSIS - COMPREHENSIVE DATA PROCESSING")
+    print("=" * 80)
+    
+    # Print polygon information
+    print(f"📍 Polygon Points: {len(polygon_data.polygon_points)} coordinates")
+    print("   Polygon coordinates:")
+    for i, point in enumerate(polygon_data.polygon_points):
+        print(f"   Point {i+1}: [{point[0]:.6f}, {point[1]:.6f}]")
+    
+    print(f"\n🗺️  Grid Points: {len(polygon_data.grid_points)} points within polygon")
+    
+    # Calculate polygon area (approximate)
+    area_km2 = 0
+    if len(polygon_data.polygon_points) >= 3:
+        # Simple shoelace formula for polygon area
+        area = 0
+        n = len(polygon_data.polygon_points)
+        for i in range(n):
+            j = (i + 1) % n
+            area += polygon_data.polygon_points[i][1] * polygon_data.polygon_points[j][0]
+            area -= polygon_data.polygon_points[j][1] * polygon_data.polygon_points[i][0]
+        area = abs(area) / 2
+        
+        # Convert to approximate square kilometers (rough conversion)
+        area_km2 = area * 111 * 111  # Very rough conversion
+        print(f"\n📏 Estimated Area: {area_km2:.2f} km²")
+    
+    # Select 10 strategic grid points that cover the entire polygon
+    grid_points_to_process = select_strategic_grid_points(polygon_data.grid_points, 10)
+    print(f"\n🔬 Processing {len(grid_points_to_process)} strategic grid points for environmental analysis...")
+    print("📍 Selected strategic points for comprehensive polygon coverage:")
+    for i, point in enumerate(grid_points_to_process):
+        print(f"   Point {i+1}: [{point[0]:.6f}, {point[1]:.6f}]")
+    
+    structured_data = {
+        "analysis_metadata": {
+            "polygon_points_count": len(polygon_data.polygon_points),
+            "grid_points_count": len(polygon_data.grid_points),
+            "processed_points": len(grid_points_to_process),
+            "analysis_type": polygon_data.analysis_type,
+            "estimated_area_km2": area_km2,
+            "grid_density_per_km2": len(polygon_data.grid_points) / area_km2 if area_km2 > 0 else 0,
+            "timestamp": datetime.now().isoformat()
+        },
+        "grid_points_data": []
+    }
+    
+    for i, point in enumerate(grid_points_to_process):
+        latitude, longitude = point[0], point[1]
+        print(f"\n{'='*60}")
+        print(f"📍 PROCESSING GRID POINT {i+1}/{len(grid_points_to_process)}")
+        print(f"   Coordinates: [{latitude:.6f}, {longitude:.6f}]")
+        print(f"{'='*60}")
+        
+        # Fetch elevation data
+        print("   🏔️  Fetching elevation data...")
+        elevation_data = get_elevation_data(latitude, longitude)
+        print(f"   Elevation: {elevation_data['elevation']:.2f} m")
+        
+        # Fetch environmental data
+        print("   🌤️  Fetching environmental data...")
+        environmental_data = get_environmental_data(latitude, longitude)
+        
+        if environmental_data:
+            print("   ✅ Environmental data fetched successfully")
+            nasa_data = environmental_data.get("nasa_power", {})
+            water_data = environmental_data.get("water_body", {})
+            location_data = environmental_data.get("location", {})
+            print(f"   Solar Radiation: {nasa_data.get('solar_radiation', 'N/A')} kW-hr/m²/day")
+            print(f"   Wind Speed: {nasa_data.get('wind_speed', 'N/A')} m/s")
+            print(f"   Is Water Body: {water_data.get('is_water', 'N/A')}")
+            print(f"   Water Feature: {water_data.get('feature', 'N/A')}")
+            print(f"   Location: {location_data.get('display_name', 'N/A')}")
+        else:
+            print("   ❌ Failed to fetch environmental data")
+        
+        # Use only real API data - no simulated values
+        water_body_proximity = None
+        
+        # Calculate renewable energy potential
+        print("   ⚡ Calculating renewable energy potential...")
+        energy_potential = calculate_renewable_energy_potential(environmental_data, elevation_data, water_body_proximity)
+        print(f"   Solar Potential: {energy_potential['solar']['potential']:.3f} ({energy_potential['solar']['suitability']})")
+        print(f"   Wind Potential: {energy_potential['wind']['potential']:.3f} ({energy_potential['wind']['suitability']})")
+        print(f"   Hydro Potential: {energy_potential['hydro']['potential']:.3f} ({energy_potential['hydro']['suitability']})")
+        print(f"   Geothermal Potential: {energy_potential['geothermal']['potential']:.3f} ({energy_potential['geothermal']['suitability']})")
+        print(f"   Water Body: {water_data.get('is_water', 'N/A')} - {water_data.get('feature', 'N/A')}")
+        
+        # Create structured data for this grid point
+        suitable_energy_types = _get_suitable_energy_types(energy_potential)
+        grid_point_data = {
+            "point_id": i + 1,
+            "coordinates": {
+                "latitude": latitude,
+                "longitude": longitude
+            },
+            "elevation_data": elevation_data,
+            "environmental_data": environmental_data,
+            "renewable_energy_potential": energy_potential,
+            "analysis_summary": {
+                "best_energy_type": _get_best_energy_type(energy_potential),
+                "overall_suitability": _get_overall_suitability(energy_potential),
+                "suitable_energy_types": suitable_energy_types,
+                "is_multi_source": len(suitable_energy_types) > 1,
+                "environmental_conditions": {
+                    "solar_radiation": nasa_data.get('solar_radiation'),
+                    "wind_speed": nasa_data.get('wind_speed'),
+                    "is_water_body": water_data.get('is_water'),
+                    "water_feature": water_data.get('feature'),
+                    "location_name": location_data.get('display_name'),
+                    "elevation": elevation_data.get('elevation')
+                }
+            }
+        }
+        
+        structured_data["grid_points_data"].append(grid_point_data)
+    
+    # Print comprehensive summary
+    print(f"\n{'='*80}")
+    print("📊 COMPREHENSIVE ANALYSIS SUMMARY")
+    print(f"{'='*80}")
+    
+    # Calculate overall statistics
+    all_energy_potentials = [point["renewable_energy_potential"] for point in structured_data["grid_points_data"]]
+    
+    if all_energy_potentials:
+        # Calculate averages using the new data structure
+        solar_potentials = [p["solar"]["potential"] for p in all_energy_potentials if p["solar"]["potential"] is not None]
+        wind_potentials = [p["wind"]["potential"] for p in all_energy_potentials if p["wind"]["potential"] is not None]
+        hydro_potentials = [p["hydro"]["potential"] for p in all_energy_potentials if p["hydro"]["potential"] is not None]
+        geothermal_potentials = [p["geothermal"]["potential"] for p in all_energy_potentials if p["geothermal"]["potential"] is not None]
+        
+        avg_solar = sum(solar_potentials) / len(solar_potentials) if solar_potentials else 0
+        avg_wind = sum(wind_potentials) / len(wind_potentials) if wind_potentials else 0
+        avg_hydro = sum(hydro_potentials) / len(hydro_potentials) if hydro_potentials else 0
+        avg_geothermal = sum(geothermal_potentials) / len(geothermal_potentials) if geothermal_potentials else 0
+        
+        print(f"🌞 Average Solar Potential: {avg_solar:.3f}")
+        print(f"💨 Average Wind Potential: {avg_wind:.3f}")
+        print(f"💧 Average Hydro Potential: {avg_hydro:.3f}")
+        print(f"🌋 Average Geothermal Potential: {avg_geothermal:.3f}")
+        
+        # Find best locations for each energy type
+        best_solar = max(structured_data["grid_points_data"], 
+                        key=lambda x: x["renewable_energy_potential"]["solar"]["potential"] or 0)
+        best_wind = max(structured_data["grid_points_data"], 
+                       key=lambda x: x["renewable_energy_potential"]["wind"]["potential"] or 0)
+        best_hydro = max(structured_data["grid_points_data"], 
+                        key=lambda x: x["renewable_energy_potential"]["hydro"]["potential"] or 0)
+        
+        print(f"\n🏆 BEST LOCATIONS:")
+        print(f"   Solar: Point {best_solar['point_id']} - {best_solar['renewable_energy_potential']['solar']['potential']:.3f} potential ({best_solar['renewable_energy_potential']['solar']['suitability']})")
+        print(f"   Wind: Point {best_wind['point_id']} - {best_wind['renewable_energy_potential']['wind']['potential']:.3f} potential ({best_wind['renewable_energy_potential']['wind']['suitability']})")
+        print(f"   Hydro: Point {best_hydro['point_id']} - {best_hydro['renewable_energy_potential']['hydro']['potential']:.3f} potential ({best_hydro['renewable_energy_potential']['hydro']['suitability']})")
+    
+    print(f"\n{'='*80}")
+    print("✅ ENVIRONMENTAL DATA COLLECTION COMPLETE")
+    print(f"{'='*80}")
+    
+    # Send data to Gemini for intelligent analysis
+    print(f"\n🤖 SENDING DATA TO GEMINI 2.0 FLASH FOR INTELLIGENT ANALYSIS...")
+    print("=" * 80)
+    
+    # Print the structured data in a more readable format
+    print("📊 STRUCTURED DATA OUTPUT:")
+    print(json.dumps(structured_data, indent=2, default=str))
+    
+    # Return the structured data as a proper response model
+    return StructuredAnalysisResponse(
+        analysis_metadata=AnalysisMetadata(**structured_data["analysis_metadata"]),
+        grid_points_data=[GridPointData(**point) for point in structured_data["grid_points_data"]]
+    )
+
+# Voice Assistant Endpoints
+@app.post("/api/voice/transcribe")
+async def transcribe_voice(audio_file: UploadFile = File(...)):
+    """Transcribe uploaded audio file to text"""
+    try:
+        # Read the audio file content
+        audio_content = await audio_file.read()
+        
+        # Transcribe using voice assistant
+        transcription = transcribe_audio(audio_content, audio_file.filename)
+        
+        return {
+            "status": "success",
+            "transcription": transcription,
+            "filename": audio_file.filename
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Transcription failed: {str(e)}"
+        }
+
+@app.post("/api/voice/chat")
+async def voice_chat(request: dict):
+    """Process text input and return AI response"""
+    try:
+        text = request.get("text", "")
+        if not text:
+            return {
+                "status": "error",
+                "message": "No text provided"
+            }
+        
+        # Get AI response
+        ai_response = get_ai_response(text)
+        
+        return {
+            "status": "success",
+            "response": ai_response
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"AI response failed: {str(e)}"
+        }
+
+@app.post("/api/voice/synthesize")
+async def synthesize_speech(request: dict):
+    """Convert text to speech and return audio"""
+    try:
+        text = request.get("text", "")
+        if not text:
+            return {
+                "status": "error",
+                "message": "No text provided"
+            }
+        
+        # Convert text to speech
+        audio_bytes = text_to_speech_elevenlabs(text)
+        
+        # Encode audio as base64 for JSON response
+        audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
+        
+        return {
+            "status": "success",
+            "audio": audio_base64,
+            "format": "mp3"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Speech synthesis failed: {str(e)}"
+        }
+
+@app.post("/api/voice/process")
+async def process_voice_interaction(audio_file: UploadFile = File(...)):
+    """Complete voice interaction: transcribe -> AI response -> synthesize"""
+    try:
+        # Step 1: Transcribe audio
+        audio_content = await audio_file.read()
+        transcription = transcribe_audio(audio_content, audio_file.filename)
+        
+        # Step 2: Get AI response
+        ai_response = get_ai_response(transcription)
+        
+        # Step 3: Convert response to speech
+        audio_bytes = text_to_speech_elevenlabs(ai_response)
+        audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
+        
+        return {
+            "status": "success",
+            "transcription": transcription,
+            "ai_response": ai_response,
+            "audio": audio_base64,
+            "format": "mp3"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Voice processing failed: {str(e)}"
+        }
 
 if __name__ == "__main__":
     import uvicorn
