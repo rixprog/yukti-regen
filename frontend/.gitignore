@@ -22,4 +22,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-myenv
+#Tecrade files
+backend/.cache.sqlite
+backend/.env
+backend/geminiinput.txt
+backend/openmeteocode.txt
+myenv/
+node_modules/
