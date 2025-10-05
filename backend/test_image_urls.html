@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Image URLs</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+        }
+        .image-test {
+            margin: 10px 0;
+        }
+        .image-test img {
+            max-width: 200px;
+            max-height: 200px;
+            border: 1px solid #ccc;
+            margin: 5px;
+        }
+        .error {
+            color: red;
+        }
+        .success {
+            color: green;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+    </style>
+</head>
+<body>
+    <h1>Image URL Testing Tool</h1>
+    
+    <div class="test-section">
+        <h2>Test Image Directories</h2>
+        <button onclick="testDirectories()">Test Directory Access</button>
+        <div id="directory-results"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>Test Image URLs</h2>
+        <button onclick="testImageUrls()">Test Image URLs</button>
+        <div id="image-results"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>Manual URL Test</h2>
+        <input type="text" id="manual-url" placeholder="Enter image URL (e.g., /api/images/after/filename.jpg)" style="width: 400px; padding: 5px;">
+        <button onclick="testManualUrl()">Test URL</button>
+        <div id="manual-results"></div>
+    </div>
+
+    <script>
+        const baseUrl = 'http://localhost:8000';
+        
+        async function testDirectories() {
+            const resultsDiv = document.getElementById('directory-results');
+            resultsDiv.innerHTML = '<p>Testing directories...</p>';
+            
+            try {
+                const response = await fetch(`${baseUrl}/api/images/test`);
+                const data = await response.json();
+                
+                let html = '<h3>Directory Status:</h3>';
+                for (const [dirName, info] of Object.entries(data.directories)) {
+                    const status = info.exists ? 'success' : 'error';
+                    const statusText = info.exists ? '✅' : '❌';
+                    html += `<p class="${status}">${statusText} ${dirName}: ${info.file_count} files</p>`;
+                    if (info.files.length > 0) {
+                        html += `<ul>`;
+                        info.files.forEach(file => {
+                            html += `<li>${file}</li>`;
+                        });
+                        html += `</ul>`;
+                    }
+                }
+                resultsDiv.innerHTML = html;
+            } catch (error) {
+                resultsDiv.innerHTML = `<p class="error">Error: ${error.message}</p>`;
+            }
+        }
+        
+        async function testImageUrls() {
+            const resultsDiv = document.getElementById('image-results');
+            resultsDiv.innerHTML = '<p>Testing image URLs...</p>';
+            
+            try {
+                // Test each directory
+                const directories = ['uploaded', 'generated', 'before', 'after'];
+                let html = '<h3>Image URL Tests:</h3>';
+                
+                for (const dir of directories) {
+                    try {
+                        const response = await fetch(`${baseUrl}/api/images/list/${dir}`);
+                        const data = await response.json();
+                        
+                        html += `<h4>${dir} images (${data.count}):</h4>`;
+                        
+                        if (data.images && data.images.length > 0) {
+                            // Test first 3 images
+                            for (let i = 0; i < Math.min(3, data.images.length); i++) {
+                                const img = data.images[i];
+                                const fullUrl = `${baseUrl}${img.url}`;
+                                html += `
+                                    <div class="image-test">
+                                        <p><strong>${img.filename}</strong></p>
+                                        <p>URL: <a href="${fullUrl}" target="_blank">${fullUrl}</a></p>
+                                        <img src="${fullUrl}" alt="${img.filename}" onerror="this.style.border='2px solid red'; this.alt='FAILED TO LOAD'">
+                                    </div>
+                                `;
+                            }
+                        } else {
+                            html += `<p>No images found in ${dir}</p>`;
+                        }
+                    } catch (error) {
+                        html += `<p class="error">Error testing ${dir}: ${error.message}</p>`;
+                    }
+                }
+                
+                resultsDiv.innerHTML = html;
+            } catch (error) {
+                resultsDiv.innerHTML = `<p class="error">Error: ${error.message}</p>`;
+            }
+        }
+        
+        async function testManualUrl() {
+            const urlInput = document.getElementById('manual-url');
+            const resultsDiv = document.getElementById('manual-results');
+            const url = urlInput.value.trim();
+            
+            if (!url) {
+                resultsDiv.innerHTML = '<p class="error">Please enter a URL</p>';
+                return;
+            }
+            
+            resultsDiv.innerHTML = '<p>Testing manual URL...</p>';
+            
+            try {
+                const fullUrl = url.startsWith('http') ? url : `${baseUrl}${url}`;
+                const response = await fetch(fullUrl);
+                
+                if (response.ok) {
+                    resultsDiv.innerHTML = `
+                        <p class="success">✅ URL works!</p>
+                        <p>Status: ${response.status}</p>
+                        <p>Content-Type: ${response.headers.get('content-type')}</p>
+                        <img src="${fullUrl}" alt="Test image" style="max-width: 300px;">
+                    `;
+                } else {
+                    resultsDiv.innerHTML = `<p class="error">❌ URL failed: ${response.status} ${response.statusText}</p>`;
+                }
+            } catch (error) {
+                resultsDiv.innerHTML = `<p class="error">❌ Error: ${error.message}</p>`;
+            }
+        }
+        
+        // Auto-test on load
+        window.onload = function() {
+            testDirectories();
+        };
+    </script>
+</body>
+</html>

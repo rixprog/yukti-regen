@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import List, Optional, Dict
 from datetime import datetime, date
@@ -11,10 +12,15 @@ import csv
 import pandas as pd
 import google.generativeai as genai
 from voice_assistant import transcribe_audio, get_ai_response, text_to_speech_elevenlabs
-from fastapi import UploadFile, File
+from fastapi import UploadFile, File, Form
 import base64
+import os
+from image_processor import ImageProcessor
 
 app = FastAPI(title="Carbon Footprint Visualizer API", version="1.0.0")
+
+# Initialize image processor
+image_processor = ImageProcessor()
 
 # API configuration for new data sources
 
@@ -1500,6 +1506,175 @@ async def process_voice_interaction(audio_file: UploadFile = File(...)):
             "status": "error",
             "message": f"Voice processing failed: {str(e)}"
         }
+
+# Image Processing Endpoints
+@app.post("/api/images/upload")
+async def upload_image(image_file: UploadFile = File(...)):
+    """Upload an image file"""
+    try:
+        # Validate file type
+        if not image_file.content_type.startswith('image/'):
+            return {
+                "status": "error",
+                "message": "File must be an image"
+            }
+        
+        # Save the uploaded image
+        file_path = image_processor.save_uploaded_image(image_file.file, image_file.filename)
+        
+        return {
+            "status": "success",
+            "message": "Image uploaded successfully",
+            "filename": os.path.basename(file_path),
+            "url": f"/api/images/uploaded/{os.path.basename(file_path)}"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Image upload failed: {str(e)}"
+        }
+
+@app.post("/api/images/process")
+async def process_image_with_ai(image_file: UploadFile = File(...), prompt: str = Form(...)):
+    """Process uploaded image with AI"""
+    try:
+        if not prompt:
+            return {
+                "status": "error",
+                "message": "Prompt is required"
+            }
+        
+        # Save the uploaded image
+        file_path = image_processor.save_uploaded_image(image_file.file, image_file.filename)
+        
+        # Process with AI
+        result = image_processor.process_image_with_ai(file_path, prompt)
+        
+        return result
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Image processing failed: {str(e)}"
+        }
+
+@app.post("/api/images/generate")
+async def generate_image_from_prompt(request: dict):
+    """Generate image from text prompt"""
+    try:
+        prompt = request.get("prompt", "")
+        if not prompt:
+            return {
+                "status": "error",
+                "message": "Prompt is required"
+            }
+        
+        result = image_processor.generate_image_from_prompt(prompt)
+        return result
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Image generation failed: {str(e)}"
+        }
+
+@app.get("/api/images/list/{image_type}")
+async def list_images(image_type: str):
+    """List images of a specific type"""
+    try:
+        valid_types = ["uploaded", "generated", "before", "after"]
+        if image_type not in valid_types:
+            return {
+                "status": "error",
+                "message": f"Invalid image type. Must be one of: {valid_types}"
+            }
+        
+        images = image_processor.list_images(image_type)
+        return {
+            "status": "success",
+            "images": images,
+            "count": len(images)
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to list images: {str(e)}"
+        }
+
+@app.get("/api/images/test")
+async def test_image_serving():
+    """Test endpoint to verify image serving is working"""
+    try:
+        # Check if directories exist
+        directories = {
+            "uploaded_images": "uploaded_images",
+            "generated_images": "generated_images", 
+            "before_images": "before_images",
+            "after_images": "after_images"
+        }
+        
+        results = {}
+        for name, path in directories.items():
+            if os.path.exists(path):
+                files = os.listdir(path)
+                results[name] = {
+                    "exists": True,
+                    "file_count": len(files),
+                    "files": files[:5]  # First 5 files
+                }
+            else:
+                results[name] = {
+                    "exists": False,
+                    "file_count": 0,
+                    "files": []
+                }
+        
+        return {
+            "status": "success",
+            "directories": results,
+            "message": "Image serving test completed"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Test failed: {str(e)}"
+        }
+
+@app.get("/api/images/edits/count")
+async def get_edit_count():
+    """Get the total count of edit images"""
+    try:
+        count = image_processor.get_edit_count()
+        return {
+            "status": "success",
+            "edit_count": count
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to get edit count: {str(e)}"
+        }
+
+@app.get("/api/images/edits/all")
+async def get_all_edits():
+    """Get all edit images with their numbers"""
+    try:
+        images = image_processor.list_images("after")
+        return {
+            "status": "success",
+            "images": images,
+            "count": len(images),
+            "edit_numbers": [img.get("edit_number") for img in images if img.get("edit_number")]
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to get edit images: {str(e)}"
+        }
+
+# Mount static files for serving images (must be after all routes)
+app.mount("/api/images/uploaded", StaticFiles(directory="uploaded_images"), name="uploaded_images")
+app.mount("/api/images/generated", StaticFiles(directory="generated_images"), name="generated_images")
+app.mount("/api/images/before", StaticFiles(directory="before_images"), name="before_images")
+app.mount("/api/images/after", StaticFiles(directory="after_images"), name="after_images")
 
 if __name__ == "__main__":
     import uvicorn

@@ -138,6 +138,7 @@ const SmartAssistant = () => {
     setConversation([]);
   };
 
+
   return (
     <div className="smart-assistant-container">
       <div className="assistant-header">
@@ -192,6 +193,7 @@ const SmartAssistant = () => {
         </form>
       </div>
 
+
       {/* Conversation Display */}
       <div className="conversation-container">
         <div className="conversation-header">
@@ -216,6 +218,8 @@ const SmartAssistant = () => {
               <div key={index} className={`message ${message.type}`}>
                 <div className="message-content">
                   <div className="message-text">{message.text}</div>
+                  
+                  
                   <div className="message-time">
                     {message.timestamp.toLocaleTimeString()}
                   </div>

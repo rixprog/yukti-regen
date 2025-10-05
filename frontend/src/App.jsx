@@ -3,6 +3,7 @@ import './App.css'
 import './colors.css'
 import RealEnergySitingMap from './components/RealEnergySitingMap'
 import SmartAssistant from './components/SmartAssistant'
+import AIImageProcessor from './components/AIImageProcessor'
 
 function App() {
   const [count, setCount] = useState(0)
@@ -74,6 +75,18 @@ function App() {
                 <path d="M12 1c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm-2 18c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm8-8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm-8 8c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm8-8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2z"/>
               </svg>
               Smart Assistant
+            </a>
+          </div>
+          <div className="nav-item">
+            <a 
+              href="#" 
+              className={`nav-link ${activeTab === 'ai-image' ? 'active' : ''}`}
+              onClick={(e) => { e.preventDefault(); setActiveTab('ai-image'); }}
+            >
+              <svg className="nav-icon" viewBox="0 0 24 24">
+                <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"/>
+              </svg>
+              AI Image Processor
             </a>
           </div>
         </nav>
@@ -213,6 +226,10 @@ function App() {
 
         {activeTab === 'assistant' && (
           <SmartAssistant />
+        )}
+
+        {activeTab === 'ai-image' && (
+          <AIImageProcessor />
         )}
       </main>
     </div>
